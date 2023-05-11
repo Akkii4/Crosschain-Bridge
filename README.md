@@ -17,6 +17,23 @@ To use the token bridge, you need to interact with the portal contracts directly
 
 To transfer tokens from Polygon to Ethereum, follow the same steps, but call the `mint` function on the Polygon portal contract instead of the `burn` function.
 
+## Testing
+
+This test file covers the following scenarios:
+
+Transferring tokens from Ethereum to Polygon.
+Transferring tokens from Polygon to Ethereum.
+Testing that burning tokens with an invalid nonce reverts.
+Testing that minting tokens from a non-owner account reverts.
+Testing that burning tokens without approval reverts.
+To test the cross-chain transfer between the Ethereum and Polygon networks, you can run the tests against the local hardhat test networks for both chains simultaneously. Here's an example command to run the tests:
+
+```shell
+npx hardhat test --network hardhat --network polygon
+```
+
+This command runs the tests against the local hardhat network and the Polygon test network. Note that you need to have the Polygon test network configured in your Hardhat networks section in the hardhat.config.js file. Also, make sure to deploy the contracts to both networks before running the tests.
+
 Try running some of the following tasks:
 
 ```shell
@@ -25,6 +42,7 @@ npx hardhat test
 REPORT_GAS=true npx hardhat test
 npx hardhat node
 npx hardhat run scripts/deploy.js
+npx hardhat run scripts/bridgeListener.js
 ```
 
 ## License
