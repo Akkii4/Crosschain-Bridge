@@ -1,150 +1,158 @@
 const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-describe("CrosschainBridge", function () {
-  let owner;
-  let user1;
-  let user2;
-  let ethToken;
-  let polyToken;
+describe("Cross-Chain Token Bridge", function () {
+  let token;
   let ethPortal;
   let polyPortal;
 
+  const AMOUNT = ethers.utils.parseEther("100");
+
   beforeEach(async function () {
-    [owner, user1, user2] = await ethers.getSigners();
+    const Token = await ethers.getContractFactory("DummyEthToken");
+    token = await Token.deploy();
+    await token.deployed();
 
-    // Deploy MockToken contracts
-    const MockToken = await ethers.getContractFactory("MockToken");
-    ethToken = await MockToken.deploy("Dummy Ethereum Token", "DET");
-    await ethToken.deployed();
-    polyToken = await MockToken.deploy("Dummy Polygon Token", "DPT");
-    await polyToken.deployed();
-
-    // Deploy CrosschainBridge contracts
-    const CrosschainBridge = await ethers.getContractFactory(
-      "CrosschainBridge"
-    );
-    ethPortal = await CrosschainBridge.deploy(polyToken.address);
+    const EthPortal = await ethers.getContractFactory("EthereumPortal");
+    ethPortal = await EthPortal.deploy(token.address);
     await ethPortal.deployed();
-    polyPortal = await CrosschainBridge.deploy(ethToken.address);
+
+    const PolyPortal = await ethers.getContractFactory("PolygonPortal");
+    polyPortal = await PolyPortal.deploy(token.address);
     await polyPortal.deployed();
-
-    // Give some tokens to user1
-    await ethToken
-      .connect(owner)
-      .mint(user1.address, ethers.utils.parseEther("1000"));
-    await polyToken
-      .connect(owner)
-      .mint(user1.address, ethers.utils.parseEther("1000"));
   });
 
-  it("should allow user to transfer tokens from Ethereum to Polygon", async function () {
-    const amount = ethers.utils.parseEther("100");
-    const nonce = 1;
+  it("should transfer tokens from Ethereum to Polygon", async function () {
+    const [sender, receiver] = await ethers.getSigners();
 
-    // Burn tokens on Ethereum
-    await expect(ethToken.connect(user1).approve(ethPortal.address, amount))
-      .to.emit(ethPortal, "Approval")
-      .withArgs(user1.address, ethPortal.address, amount);
-    await expect(ethPortal.connect(user1).burn(polyPortal.address, amount))
+    // Mint tokens to sender
+    await token.connect(sender).mint(sender.address, AMOUNT);
+
+    // Approve the Ethereum portal to spend tokens on behalf of sender
+    await token.connect(sender).approve(ethPortal.address, AMOUNT);
+
+    // Burn tokens on Ethereum and initiate cross-chain transfer
+    const nonce = 0;
+    await expect(
+      ethPortal.connect(sender).burn(receiver.address, AMOUNT, nonce)
+    )
       .to.emit(ethPortal, "CrossTransfer")
-      .withArgs(user1.address, polyPortal.address, amount, 0, nonce, 0);
+      .withArgs(
+        sender.address,
+        receiver.address,
+        AMOUNT,
+        ethers.BigNumber,
+        nonce,
+        ethers.AnyBytes,
+        0 // Burn
+      );
 
-    // Check that the tokens were burned on Ethereum
-    expect(await ethToken.balanceOf(user1.address)).to.equal(
-      ethers.utils.parseEther("900")
+    // Wait for the cross-chain transfer event on Polygon
+    const polyFilter = polyPortal.filters.CrossTransfer(
+      null,
+      null,
+      null,
+      null,
+      nonce,
+      null,
+      1 // Mint
     );
-
-    // Check that the tokens were minted on Polygon
-    expect(await polyToken.balanceOf(user1.address)).to.equal(amount);
+    const [polyEvent] = await polyPortal.queryFilter(polyFilter);
+    expect(polyEvent.args.sender).to.equal(sender.address);
+    expect(polyEvent.args.reciever).to.equal(receiver.address);
+    expect(polyEvent.args.tokenAmount).to.equal(AMOUNT);
+    expect(polyEvent.args.timestamp).to.be.a("number");
+    expect(polyEvent.args.nonce).to.equal(nonce);
+    expect(polyEvent.args.signature).to.be.instanceOf(Uint8Array);
+    expect(polyEvent.args.status).to.equal(1); // Mint
   });
 
-  it("should allow user to transfer tokens from Polygon to Ethereum", async function () {
-    const amount = ethers.utils.parseEther("100");
-    const nonce = 1;
+  it("should transfer tokens from Polygon to Ethereum", async function () {
+    const [sender, receiver] = await ethers.getSigners();
 
-    // Burn tokens on Polygon
-    await expect(polyToken.connect(user1).approve(polyPortal.address, amount))
-      .to.emit(polyPortal, "Approval")
-      .withArgs(user1.address, polyPortal.address, amount);
-    await expect(polyPortal.connect(user1).burn(ethPortal.address, amount))
+    // Mint tokens to sender on Polygon
+    await token.connect(sender).mint(sender.address, AMOUNT);
+    await token.connect(sender).approve(polyPortal.address, AMOUNT);
+
+    // Burn tokens on Polygon and initiate cross-chain transfer
+    const nonce = 0;
+    await expect(
+      polyPortal.connect(sender).burn(receiver.address, AMOUNT, nonce)
+    )
       .to.emit(polyPortal, "CrossTransfer")
-      .withArgs(user1.address, ethPortal.address, amount, 0, nonce, 0);
+      .withArgs(
+        sender.address,
+        receiver.address,
+        AMOUNT,
+        ethers.BigNumber,
+        nonce,
+        ethers.AnyBytes,
+        0 // Burn
+      );
 
-    // Check that the tokens were burned on Polygon
-    expect(await polyToken.balanceOf(user1.address)).to.equal(
-      ethers.utils.parseEther("900")
+    // Wait for the cross-chain transfer event on Ethereum
+    const ethFilter = ethPortal.filters.CrossTransfer(
+      null,
+      null,
+      null,
+      null,
+      nonce,
+      null,
+      1 // Mint
     );
-
-    // Check that the tokens were minted on Ethereum
-    expect(await ethToken.balanceOf(user1.address)).to.equal(amount);
+    const [ethEvent] = await ethPortal.queryFilter(ethFilter);
+    expect(ethEvent.args.sender).to.equal(sender.address);
+    expect(ethEvent.args.reciever).to.equal(receiver.address);
+    expect(ethEvent.args.tokenAmount).to.equal(AMOUNT);
+    expect(ethEvent.args.timestamp).to.be.a("number");
+    expect(ethEvent.args.nonce).to.equal(nonce);
+    expect(ethEvent.args.signature).to.be.instanceOf(Uint8Array);
+    expect(ethEvent.args.status).to.equal(1); // Mint
   });
 
-  it("should prevent user from burning more tokens than they have on Ethereum", async function () {
-    const amount = ethers.utils.parseEther("1001");
+  it("should not allow burning tokens with an invalid nonce", async function () {
+    const [sender, receiver] = await ethers.getSigners();
 
-    // Attempt to burn more tokens than user has on Ethereum
-    await expect(ethToken.connect(user1).approve(ethPortal.address, amount))
-      .to.emit(ethPortal, "Approval")
-      .withArgs(user1.address, ethPortal.address, amount);
+    // Mint tokens to sender
+    await token.connect(sender).mint(sender.address, AMOUNT);
+
+    // Approve the Ethereum portal to spend tokens on behalf of sender
+    await token.connect(sender).approve(ethPortal.address, AMOUNT);
+
+    // Burn tokens on Ethereum with invalid nonce
+    const invalidNonce = 999;
     await expect(
-      ethPortal.connect(user1).burn(polyPortal.address, amount)
-    ).to.be.revertedWith("MockToken: burn amount exceeds balance");
-
-    // Check that no tokens were burned on Ethereum
-    expect(await ethToken.balanceOf(user1.address)).to.equal(
-      ethers.utils.parseEther("1000")
-    );
-
-    // Check that no tokens were minted on Polygon
-    expect(await polyToken.balanceOf(user1.address)).to.equal(0);
-  });
-
-  it("should prevent user from burning more tokens than they have on Polygon", async function () {
-    const amount = ethers.utils.parseEther("1001");
-
-    // Attempt to burn more tokens than user has on Polygon
-    await expect(polyToken.connect(user1).approve(polyPortal.address, amount))
-      .to.emit(polyPortal, "Approval")
-      .withArgs(user1.address, polyPortal.address, amount);
-    await expect(
-      polyPortal.connect(user1).burn(ethPortal.address, amount)
-    ).to.be.revertedWith("MockToken: burn amount exceeds balance");
-
-    // Check that no tokens were burned on Polygon
-    expect(await polyToken.balanceOf(user1.address)).to.equal(
-      ethers.utils.parseEther("1000")
-    );
-
-    // Check that no tokens were minted on Ethereum
-    expect(await ethToken.balanceOf(user1.address)).to.equal(0);
-  });
-
-  it("should prevent duplicate cross-chain transfers", async function () {
-    const amount = ethers.utils.parseEther("100");
-    const nonce = 1;
-
-    // Burn tokens on Ethereum
-    await expect(ethToken.connect(user1).approve(ethPortal.address, amount))
-      .to.emit(ethPortal, "Approval")
-      .withArgs(user1.address, ethPortal.address, amount);
-    await expect(ethPortal.connect(user1).burn(polyPortal.address, amount))
-      .to.emit(ethPortal, "CrossTransfer")
-      .withArgs(user1.address, polyPortal.address, amount, 0, nonce, 0);
-
-    // Attempt to burn the same tokens again with the same nonce
-    await expect(ethToken.connect(user1).approve(ethPortal.address, amount))
-      .to.emit(ethPortal, "Approval")
-      .withArgs(user1.address, ethPortal.address, amount);
-    await expect(
-      ethPortal.connect(user1).burn(polyPortal.address, amount)
+      ethPortal.connect(sender).burn(receiver.address, AMOUNT, invalidNonce)
     ).to.be.revertedWith("Already transferred");
+  });
 
-    // Check that the tokens were only burned once on Ethereum
-    expect(await ethToken.balanceOf(user1.address)).to.equal(
-      ethers.utils.parseEther("900")
-    );
+  it("should not allow minting tokens from a non-owner", async function () {
+    const [sender, receiver] = await ethers.getSigners();
 
-    // Check that the tokens were only minted once on Polygon
-    expect(await polyToken.balanceOf(user1.address)).to.equal(amount);
+    // Mint tokens to sender on Polygon
+    await token.connect(sender).mint(sender.address, AMOUNT);
+    await token.connect(sender).approve(polyPortal.address, AMOUNT);
+
+    // Try to mint tokens on Ethereum from a non-owner account
+    const nonce = 0;
+    const invalidSender = ethers.Wallet.createRandom();
+    await expect(
+      polyPortal
+        .connect(invalidSender)
+        .mint(sender.address, receiver.address, AMOUNT, nonce, [])
+    ).to.be.revertedWith("Ownable: caller is not the owner");
+  });
+
+  it("should not allow burning tokens without approval", async function () {
+    const [sender, receiver] = await ethers.getSigners();
+
+    // Mint tokens to sender
+    await token.connect(sender).mint(sender.address, AMOUNT);
+
+    // Burn tokens on Ethereum without approval
+    const nonce = 0;
+    await expect(
+      ethPortal.connect(sender).burn(receiver.address, AMOUNT, nonce)
+    ).to.be.revertedWith("ERC20: transfer amount exceeds allowance");
   });
 });
